@@ -5,7 +5,8 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/foundation.dart' as foundation;
-import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
 
 class ChatView extends StatefulWidget {
   const ChatView({super.key});
@@ -886,7 +887,6 @@ class _ChatScreenState extends State<ChatScreen> {
         final file = result.files.single;
 
         // Check size (25MB limit)
-        // 25MB = 25 * 1024 * 1024 bytes
         if (file.size > 25 * 1024 * 1024) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('File size exceeds 25MB limit')),
@@ -911,21 +911,25 @@ class _ChatScreenState extends State<ChatScreen> {
           'chat_attachments',
         );
 
+        Uint8List? fileBytes;
+
         if (foundation.kIsWeb) {
-          if (file.bytes != null) {
-            await storage.uploadBinary(safeFileName, file.bytes!);
-          } else {
-            throw 'No file data found';
-          }
+          fileBytes = file.bytes;
         } else {
+          // On Mobile/Desktop, read from path
           if (file.path != null) {
-            final ioFile = File(file.path!);
-            await storage.upload(safeFileName, ioFile);
-          } else if (file.bytes != null) {
-            // Fallback if path is null
-            await storage.uploadBinary(safeFileName, file.bytes!);
+            // We can use XFile to read bytes without dart:io directly in this scope if we import image_picker which exports cross_file,
+            // or just standard File if we kept dart:io. But for Web compat, avoiding direct File reference is safer if conditionally imported.
+            // Since we removed dart:io, we must use XFile.
+            fileBytes = await XFile(file.path!).readAsBytes();
           }
         }
+
+        if (fileBytes == null) {
+          throw 'Could not read file data';
+        }
+
+        await storage.uploadBinary(safeFileName, fileBytes);
 
         final publicUrl = storage.getPublicUrl(safeFileName);
 
@@ -938,8 +942,7 @@ class _ChatScreenState extends State<ChatScreen> {
         String msg = 'Error uploading file: $e';
         if (e.toString().contains('403') ||
             e.toString().contains('row-level security')) {
-          msg =
-              "Permission denied. Please ensure 'chat_attachments' bucket exists and has public RLS policies.";
+          msg = "Permission denied. Check bucket RLS policies.";
         }
         ScaffoldMessenger.of(
           context,
